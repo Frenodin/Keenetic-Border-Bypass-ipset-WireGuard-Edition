@@ -1,34 +1,40 @@
-# Keenetic Border Bypass ipset WireGuard Edition
-Реализация селективной маршрутизации заблокированных ресурсов на роутерах Keenetic с использованием среды Entware, ipset, iptables и раздельного туннелирования.
+# Keenetic Border Bypass: ipset WireGuard Edition
 
+[![KeenOS](https://img.shields.io/badge/Router-Keenetic-blue)](https://keenetic.link/)
+[![Entware](https://img.shields.io/badge/Environment-Entware-orange)](https://pkg.entware.net/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-# Keenetic Border Bypass: Гибридная маршрутизация **ipset + WireGuard**
+Реализация селективной маршрутизации заблокированных ресурсов на роутерах Keenetic. Решение использует связку **Entware**, **ipset**, **iptables** и раздельное туннелирование через **WireGuard**.
 
-Данный репозиторий содержит набор скриптов для настройки селективной маршрутизации на роутерах Keenetic с установленным **Entware**. Решение позволяет автоматически направлять заблокированный трафик через VPN-туннель WireGuard, сохраняя высокую производительность и гибкость настройки.
+---
 
 ## Основные возможности
-* **Автоматизация:** Списки заблокированных IP обновляются по расписанию.
-* **Производительность:** Использование `ipset` хеш-таблицы в ядре Linux обеспечивает мгновенный поиск IP даже в огромных списках.
-* **Гибридность:** Совместимость со штатными маршрутами Keenetic и DNS-маршрутизацией (снупингом) для сложных CDN Discord, Twitter.
-* **Живучесть:** Автоматическое восстановление правил после перезагрузки роутера или переподключения VPN.
+
+* **Автоматизация:** Списки заблокированных IP-адресов обновляются автоматически по расписанию через `cron`.
+* **Высокая производительность:** Использование `ipset` (хеш-таблицы в ядре Linux) гарантирует мгновенный поиск IP даже при списках в 100 000+ записей без нагрузки на CPU.
+* **Гибридность:** Полная совместимость со штатными функциями KeenOS (DNS-снупинг/маршрутизация доменов) для сервисов с динамическими IP (Discord, Twitter, Instagram).
+* **Живучесть:** Скрипты-хуки автоматически восстанавливают правила после перезагрузки роутера или переподключения VPN-туннеля.
 
 ---
 
 ## Подготовка
-Для работы системы необходимо:
-1.  **Entware** на USB-накопителе.
-2.  **WireGuard туннель**, настроенный в веб-интерфейсе например, под названием `CH`.
+
+Для работы системы необходимо наличие:
+1.  **Entware** на USB-накопителе (установленный по официальной инструкции).
+2.  **WireGuard туннель**, настроенный и активный (например, с именем `CH`).
 3.  Установленные пакеты:
     ```bash
     opkg update
     opkg install ipset iptables curl bash cron
     ```
+
 ---
 
 ## Описание скриптов
 
-### 1. Обновление списков IP `/opt/bin/update_rublock.sh`
-Этот скрипт скачивает агрегированные списки заблокированных подсетей и загружает их в оперативную память.
+### 1. Обновление списков IP 
+**Путь:** `/opt/bin/update_rublock.sh`  
+Скачивает агрегированные списки подсетей и атомарно обновляет таблицу в памяти роутера.
 
 ```bash
 #!/opt/bin/bash
@@ -38,11 +44,11 @@ LIST_URL="[https://antifilter.download/list/allyouneed.lst](https://antifilter.d
 TMP_FILE="/opt/tmp/rublock.txt"
 RESTORE_FILE="/opt/tmp/rublock.restore"
 SET_NAME="rublock"
-INTERFACE="nwg0" # Имя интерфейса в ядре Linux (проверьте через 'ip link show | grep nwg')
+INTERFACE="nwg0" # Имя интерфейса в ядре Linux (ip link show | grep nwg)
 
 mkdir -p /opt/tmp
 
-# Скачивание списка через туннель (защита от блокировки источника)
+# Скачивание списка через туннель (защита от блокировки самого источника)
 echo "Downloading list via $INTERFACE..."
 curl -L --interface "$INTERFACE" "$LIST_URL" | grep -v ':' > "$TMP_FILE"
 
@@ -64,9 +70,11 @@ echo "Список $SET_NAME успешно обновлен."
 
 ```
 
-### 2. Маркировка пакетов `/opt/etc/ndm/netfilter.d/100-rublock-mark.sh`
+### 2. Маркировка пакетов
 
-Хук Netfilter, который срабатывает при обновлении сетевого экрана KeenOS. Он "метит" нужные пакеты.
+**Путь:** `/opt/etc/ndm/netfilter.d/100-rublock-mark.sh`
+
+Хук Netfilter, который срабатывает при обновлении сетевого экрана. Он "метит" нужный трафик.
 
 ```bash
 #!/bin/sh
@@ -78,43 +86,42 @@ SET_NAME="rublock"
 FWMARK="0x7117"
 INTERFACE="nwg0"
 
-# Гарантируем создание сета (предотвращает ошибки iptables)
+# Гарантируем наличие сета
 ipset create $SET_NAME hash:net family inet hashsize 8192 maxelem 131072 -exist
 
 # Маркировка трафика из локальной сети к заблокированным IP
 iptables -w -t mangle -C PREROUTING -m set --match-set $SET_NAME dst -j MARK --set-mark $FWMARK 2>/dev/null || \
 iptables -w -t mangle -A PREROUTING -m set --match-set $SET_NAME dst -j MARK --set-mark $FWMARK
 
-# Включаем NAT (Masquerade) для этого трафика на выходе из VPN
+# Включаем NAT для этого трафика на выходе из VPN
 iptables -w -t nat -C POSTROUTING -o "$INTERFACE" -m mark --mark $FWMARK -j MASQUERADE 2>/dev/null || \
 iptables -w -t nat -A POSTROUTING -o "$INTERFACE" -m mark --mark $FWMARK -j MASQUERADE
 
 ```
 
-### 3. Управление маршрутами `/opt/etc/ndm/ifstatechanged.d/100-rublock-route.sh`
+### 3. Управление маршрутизацией
 
-Хук события интерфейса. Создает отдельную таблицу маршрутизации при поднятии VPN.
+**Путь:** `/opt/etc/ndm/ifstatechanged.d/100-rublock-route.sh`
+
+Создает выделенную таблицу маршрутизации при поднятии интерфейса.
 
 ```bash
 #!/bin/sh
 
-# Wireguard0 — системное имя в Keenetic (проверьте в JSON конфиге или по логам)
+# Wireguard0 — системное имя в Keenetic
 [ "$system_name" == "Wireguard0" ] || exit 0
 
 FWMARK="0x7117"
 TABLE_ID="111"
-INTERFACE="nwg0" # Системное имя в ядре Linux
+INTERFACE="nwg0" # Системное имя в ядре
 
 if [ "$change" == "link" ] && [ "$link" == "up" ]; then
-    # Направляем пакеты с меткой 0x7117 в таблицу 111
     ip rule add fwmark $FWMARK table $TABLE_ID 2>/dev/null
     
-    # Дефолтный маршрут в таблице 111 идет строго в VPN
     ip route flush table $TABLE_ID
     ip route add default dev "$INTERFACE" table $TABLE_ID
     ip route flush cache
 elif [ "$change" == "link" ] && [ "$link" == "down" ]; then
-    # Очистка при отключении туннеля
     ip rule del fwmark $FWMARK table $TABLE_ID 2>/dev/null
     ip route flush table $TABLE_ID
 fi
@@ -123,9 +130,9 @@ fi
 
 ---
 
-## Инструкция по установке
+## Установка
 
-1. **Создайте файлы** на роутере через SSH, вставив соответствующий код выше.
+1. **Создайте файлы** через SSH и вставьте соответствующий код.
 2. **Выдайте права на исполнение:**
 ```bash
 chmod +x /opt/bin/update_rublock.sh
@@ -135,14 +142,14 @@ chmod +x /opt/etc/ndm/ifstatechanged.d/100-rublock-route.sh
 ```
 
 
-3. **Запустите первичную загрузку списка:**
+3. **Запустите первичную загрузку:**
 ```bash
 /opt/bin/update_rublock.sh
 
 ```
 
 
-4. **Настройте расписание обновлений:**
+4. **Настройте расписание Cron:**
 Добавьте строку в `/opt/etc/crontab`:
 ```text
 0 4 * * * root /opt/bin/update_rublock.sh
@@ -150,22 +157,38 @@ chmod +x /opt/etc/ndm/ifstatechanged.d/100-rublock-route.sh
 ```
 
 
-И перезапустите cron: `/opt/etc/init.d/S10cron restart`.
-5. **Перезагрузите WireGuard интерфейс** в веб-интерфейсе роутера.
+Перезапустите планировщик: `/opt/etc/init.d/S10cron restart`.
+5. **Перезагрузите WireGuard** (выключите и включите в меню "Другие подключения").
 
 ---
 
 ## Диагностика
 
-* **Проверка наполнения списка:** `ipset list rublock | head -n 20`
-* **Проверка маркировки (счетчики должны расти):** `iptables -t mangle -L PREROUTING -v -n | grep rublock`
-* **Проверка таблицы маршрутизации:** `ip rule show | grep 7117`
+* **Наполнение списка:** `ipset list rublock | head -n 20`
+* **Работа маркировки:** `iptables -t mangle -L PREROUTING -v -n | grep rublock`
+* **Правила маршрутизации:** `ip rule show | grep 7117`
+
+---
 
 ## Важные дополнения
 
-Для работы сервисов с динамическими IP Discord, Twitter, Instagram рекомендуется комбинировать данные скрипты со штатной функцией Keenetic **"Маршруты DNS"**:
+Для обхода блокировок сервисов со сложными CDN (Discord, Twitter, Instagram) рекомендуется использовать штатную функцию **"Маршруты DNS"** в интерфейсе Keenetic:
 
-1. Перейдите в **Сетевые правила** -> **Маршрутизация** -> **Маршруты DNS**.
-2. Добавьте домены (например, `discord.com`, `twitter.com`) и укажите интерфейс вашего VPN.
+1. **Сетевые правила** -> **Маршрутизация** -> **Маршруты DNS**.
+2. Добавьте домены (например, `discord.com`, `x.com`).
+3. Выберите ваш VPN-интерфейс.
+
+```
+
+---
+
+### Визуализация логики работы
+
+Чтобы лучше понять, как работают ваши скрипты, я подготовил интерактивную схему «Путь пакета». Она наглядно показывает, в какой момент срабатывает `ipset`, где ставится метка и как пакет в итоге выбирает путь между вашим обычным провайдером и VPN.
+
+
+
+```json?chameleon
+{"component":"LlmGeneratedComponent","props":{"height":"700px","prompt":"Создай интерактивный визуализатор 'Путь пакета в Keenetic' на русском языке. \nОбъект: пакет данных, идущий от ПК в интернет. \n\nЛогика визуализации:\n1. Начало: Пакет выходит из локальной сети.\n2. Этап 1: Проверка 'Маршрутов DNS'. Если домен в списке (например, discord.com), пакет сразу уходит в VPN.\n3. Этап 2: Netfilter (mangle). Проверка IP в ipset 'rublock'. \n   - Если IP найден -> Ставится метка 0x7117.\n   - Если нет -> Идет дальше.\n4. Этап 3: Выбор таблицы маршрутизации.\n   - Если метка 0x7117 -> Идет в таблицу 111 -> Выход через WireGuard.\n   - Если метки нет -> Основная таблица маршрутизации -> Провайдер (Skynet/МТС).\n\nИнтерактив: \n- Кнопки 'Пакет на Яндекс' (идет через провайдера) и 'Пакет на Rutracker' (идет через VPN).\n- Анимация движения пакета по линиям между блоками.\n- Пояснительные всплывающие подсказки при клике на этапы (ipset, iptables, ip rule).\n\nСтиль: Технологичная блок-схема, профессиональный вид.","id":"im_01b552eec8a6cd03"}}
 
 ```

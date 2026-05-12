@@ -166,5 +166,3 @@ chmod +x /opt/etc/ndm/ifstatechanged.d/100-rublock-route.sh
 1. **Сетевые правила** -> **Маршрутизация** -> **Маршруты DNS**.
 2. Добавьте домены например, `discord.com`, `x.com`.
 3. Выберите ваш VPN-интерфейс.
-
----

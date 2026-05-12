@@ -27,7 +27,7 @@
     ```
 
 ### 1. Обновление списков IP 
-**Путь:** `/opt/bin/update_rublock.sh`  
+**Путь:** `nano /opt/bin/update_rublock.sh`  
 Скачивает агрегированные списки подсетей и атомарно обновляет таблицу в памяти роутера.
 
 ```bash
@@ -66,7 +66,7 @@ echo "Список $SET_NAME успешно обновлен."
 
 ### 2. Маркировка пакетов
 
-**Путь:** `/opt/etc/ndm/netfilter.d/100-rublock-mark.sh`
+**Путь:** `nano /opt/etc/ndm/netfilter.d/100-rublock-mark.sh`
 
 Хук **Netfilter**, который срабатывает при обновлении сетевого экрана. Он "метит" нужный трафик.
 
@@ -95,7 +95,7 @@ iptables -w -t nat -A POSTROUTING -o "$INTERFACE" -m mark --mark $FWMARK -j MASQ
 
 ### 3. Управление маршрутизацией
 
-**Путь:** `/opt/etc/ndm/ifstatechanged.d/100-rublock-route.sh`
+**Путь:** `nano /opt/etc/ndm/ifstatechanged.d/100-rublock-route.sh`
 
 Создает выделенную таблицу маршрутизации при поднятии интерфейса.
 

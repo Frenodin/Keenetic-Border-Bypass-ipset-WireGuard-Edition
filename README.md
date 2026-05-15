@@ -222,14 +222,6 @@ traceroute 1.1.1.1
 
 *Если второй прыжок — это внутренний IP вашего VPN-сервера, маршрутизация работает верно.*
 
-### Уровень 5: Анализ логов
-
-```bash
-ndmq -p 'show log' | grep -E "Rublock|ipset"
-
-```
-
-
 * **Наполнение списка:** `ipset list rublock | head -n 20`
 * **Работа маркировки:** `iptables -t mangle -L PREROUTING -v -n | grep rublock`
 * **Правила маршрутизации:** `ip rule show | grep 7117`

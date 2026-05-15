@@ -2,35 +2,47 @@
 
 # Настройки
 LIST_URL="https://antifilter.download/list/allyouneed.lst"
-TMP_FILE="/opt/tmp/rublock.txt"
-RESTORE_FILE="/opt/tmp/rublock.restore"
+# Используем RAM-диск KeenOS для снижения I/O на флешку
+TMP_FILE="/tmp/rublock.txt"
+RESTORE_FILE="/tmp/rublock.restore"
 SET_NAME="rublock"
-INTERFACE="nwg0" # Интерфейс ядра для Швейцарии
+TMP_SET="${SET_NAME}_tmp"
+INTERFACE="nwg0"
 
-# Создаем временную директорию, если её нет
-mkdir -p /opt/tmp
-
-# Скачиваем список (без -s, чтобы видеть ошибки в логах)
+# Скачиваем список с жесткими таймаутами (10 сек коннект, 60 сек на всю загрузку)
 echo "Downloading list via $INTERFACE..."
-curl -L --interface "$INTERFACE" "$LIST_URL" | grep -v ':' > "$TMP_FILE"
+curl -L --interface "$INTERFACE" --connect-timeout 10 --max-time 60 -s "$LIST_URL" > "$TMP_FILE"
 
+# Проверка: существует ли файл и больше ли он 0 байт
 if [ ! -s "$TMP_FILE" ]; then
-    echo "Error: Downloaded file is empty. Check your VPN connection."
+    logger -t Rublock "Error: Downloaded list is empty or failed. Check VPN $INTERFACE."
+    rm -f "$TMP_FILE"
     exit 1
 fi
 
-# Формируем файл для ipset restore
+# Убеждаемся, что основной список существует (на случай первого запуска)
 echo "create $SET_NAME hash:net family inet hashsize 8192 maxelem 131072 -exist" > "$RESTORE_FILE"
-echo "flush $SET_NAME" >> "$RESTORE_FILE"
-awk -v set="$SET_NAME" '{print "add " set " " $1}' "$TMP_FILE" >> "$RESTORE_FILE"
 
-# Добавляем личные адреса
+# Создаем временный список и очищаем его (если остался от прошлого сбоя)
+echo "create $TMP_SET hash:net family inet hashsize 8192 maxelem 131072 -exist" >> "$RESTORE_FILE"
+echo "flush $TMP_SET" >> "$RESTORE_FILE"
+
+# Парсим скачанный файл (отсекая IPv6-адреса, если вдруг проскочат, прямо через awk для скорости)
+awk -v set="$TMP_SET" '!/:/ {print "add " set " " $1}' "$TMP_FILE" >> "$RESTORE_FILE"
+
+# Добавляем кастомные IP, если файл есть
 if [ -f "/opt/etc/my_custom_ips.txt" ]; then
-    awk -v set="$SET_NAME" '{print "add " set " " $1}' /opt/etc/my_custom_ips.txt >> "$RESTORE_FILE"
+    awk -v set="$TMP_SET" '!/:/ {print "add " set " " $1}' /opt/etc/my_custom_ips.txt >> "$RESTORE_FILE"
 fi
 
-# Применяем атомарно
+# Атомарно подменяем старый список новым и уничтожаем временный
+echo "swap $SET_NAME $TMP_SET" >> "$RESTORE_FILE"
+echo "destroy $TMP_SET" >> "$RESTORE_FILE"
+
+# Загружаем правила в ядро
 ipset restore < "$RESTORE_FILE"
 
-echo "Success! ipset $SET_NAME updated."
+logger -t Rublock "Success! ipset $SET_NAME updated with Zero-Downtime."
+
+# Очистка RAM
 rm -f "$TMP_FILE" "$RESTORE_FILE"
